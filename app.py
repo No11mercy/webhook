@@ -1,18 +1,119 @@
 from flask import Flask, request, render_template_string
 from datetime import datetime
+import requests
+import hmac
+import hashlib
+import time
 
 app = Flask(__name__)
 
 # Хранилище для полученных вебхуков
 webhooks = []
 
+# Переменные для хранения последних сигналов
+last_indicator_signal = None
+last_strategy_signal = None
+
+# Конфигурация торговли
+trade_config = {
+    "instrument": "BTC-USDT",  # Инструмент для торговли
+    "trade_type": "futures",    # Тип торговли: "spot", "margin", "futures"
+    "order_type": "limit",      # Тип ордера: "market", "limit"
+    "margin_mode": "isolated",  # Режим маржи: "isolated", "cross"
+    "position_size_percent": 50 # Размер позиции в процентах от баланса
+}
+
+# Ваши данные API
+api_key = "e7d3faf8-8b6a-4708-9d45-d842e1050e17"
+secret_key = "332D62A8E67767FF68E021CA5CAA5C9C"
+api_passphrase = "1459_Malwar_10_000_Go_Far"
+
+# Функция для генерации подписи
+def generate_signature(api_secret, timestamp, body):
+    message = f"{timestamp}{body}"
+    signature = hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return signature
+
+# Функция для получения баланса счета
+def get_account_balance():
+    url = 'https://www.okx.com/api/v5/account/balance'
+    timestamp = str(int(time.time()))
+    headers = {
+        'Content-Type': 'application/json',
+        'OK-ACCESS-KEY': api_key,
+        'OK-ACCESS-SIGN': generate_signature(secret_key, timestamp, '{"data": {}}'),
+        'OK-ACCESS-TIMESTAMP': timestamp,
+        'OK-ACCESS-PASSPHRASE': api_passphrase,
+    }
+    response = requests.get(url, headers=headers)
+    return response.json()
+
+# Функция для отправки ордера на OKX
+def place_order_on_okx(action):
+    balance_data = get_account_balance()
+    # Предполагаем, что balance_data содержит баланс для нужного типа торговли
+    # Обратите внимание, что API может возвращать данные в другой структуре
+    balance = float(balance_data['data'][0]['total'])  # Пример получения общего баланса
+
+    position_size = (balance * trade_config["position_size_percent"] / 100)
+
+    url = 'https://www.okx.com/api/v5/trade/order'
+    timestamp = str(int(time.time()))
+    headers = {
+        'Content-Type': 'application/json',
+        'OK-ACCESS-KEY': api_key,
+        'OK-ACCESS-SIGN': generate_signature(secret_key, timestamp, '{"data": {}}'),
+        'OK-ACCESS-TIMESTAMP': timestamp,
+        'OK-ACCESS-PASSPHRASE': api_passphrase,
+    }
+    data = {
+        "instId": trade_config["instrument"],  # Пара, например, BTC-USDT
+        "tdMode": trade_config["margin_mode"],  # Режим маржи
+        "side": action,  # "buy" для лонга, "sell" для шорта
+        "ordType": trade_config["order_type"],  # Тип ордера
+        "sz": str(position_size)  # Размер позиции
+    }
+    response = requests.post(url, json=data, headers=headers)
+    return response.json()
+
+# Функция для проверки и выполнения действий
+def check_and_execute_trade():
+    global last_indicator_signal, last_strategy_signal
+
+    if last_indicator_signal and last_strategy_signal:
+        indicator_action = last_indicator_signal.get('action')
+        strategy_action = last_strategy_signal.get('signal')
+
+        if indicator_action == 'long' and strategy_action == 'signal':
+            result = place_order_on_okx('buy')
+            print("Вход в лонг на OKX:", result)
+        elif indicator_action == 'short' and strategy_action == 'signal':
+            result = place_order_on_okx('sell')
+            print("Вход в шорт на OKX:", result)
+
+        # Сбрасываем сигналы после выполнения
+        last_indicator_signal = None
+        last_strategy_signal = None
+
 # Маршрут для получения вебхуков
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    global last_indicator_signal, last_strategy_signal
+
     data = request.json
     if data:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         webhooks.append({'timestamp': timestamp, 'data': data})
+
+        # Определяем тип сигнала
+        if 'action' in data:  # Это сигнал от индикатора
+            last_indicator_signal = data
+        elif 'signal' in data:  # Это сигнал от стратегии
+            last_strategy_signal = data
+
+        # Проверяем и выполняем сделку, если оба сигнала присутствуют
+        check_and_execute_trade()
+
     return 'Webhook received', 200
 
 # Маршрут для отображения вебхуков
@@ -40,9 +141,9 @@ def index():
                     </tr>
                 </thead>
                 <tbody>
-                    {% for i, webhook in enumerate(webhooks) %}
+                    {% for i, webhook in webhooks %}
                     <tr>
-                        <th scope="row">{{ i + 1 }}</th>
+                        <th scope="row">{{ loop.index }}</th>
                         <td>{{ webhook.timestamp }}</td>
                         <td><pre>{{ webhook.data | tojson(indent=2) }}</pre></td>
                     </tr>
@@ -54,8 +155,7 @@ def index():
     </body>
     </html>
     '''
-    # Передаем функцию enumerate в контекст шаблона
-    return render_template_string(template, webhooks=webhooks, enumerate=enumerate)
+    return render_template_string(template, webhooks=webhooks)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
