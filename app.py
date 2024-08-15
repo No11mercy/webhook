@@ -156,11 +156,11 @@ def index():
                     </tr>
                 </thead>
                 <tbody>
-                    {% for i, webhook in enumerate(webhooks) %}
+                    {% for i in range(webhooks | length) %}
                     <tr>
                         <th scope="row">{{ i + 1 }}</th>
-                        <td>{{ webhook.timestamp }}</td>
-                        <td><pre>{{ webhook.data | default({}) | tojson(indent=2) }}</pre></td>
+                        <td>{{ webhooks[i].timestamp }}</td>
+                        <td><pre>{{ webhooks[i].data | default({}) | tojson(indent=2) }}</pre></td>
                     </tr>
                     {% endfor %}
                 </tbody>
