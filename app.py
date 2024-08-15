@@ -3,6 +3,7 @@ from datetime import datetime
 import hmac
 import hashlib
 import time
+import requests
 
 app = Flask(__name__)
 
@@ -160,7 +161,7 @@ def index():
                     <tr>
                         <th scope="row">{{ i + 1 }}</th>
                         <td>{{ webhooks[i].timestamp }}</td>
-                        <td><pre>{{ webhooks[i].data | default({}) | tojson(indent=2) }}</pre></td>
+                        <td><pre>{{ webhooks[i].data | tojson(indent=2) }}</pre></td>
                     </tr>
                     {% endfor %}
                 </tbody>
