@@ -3,7 +3,6 @@ from datetime import datetime
 import hmac
 import hashlib
 import time
-import requests
 
 app = Flask(__name__)
 
