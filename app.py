@@ -1,6 +1,5 @@
 from flask import Flask, request, render_template_string
 from datetime import datetime
-import requests
 import hmac
 import hashlib
 import time
