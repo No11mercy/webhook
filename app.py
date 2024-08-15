@@ -44,15 +44,26 @@ def get_account_balance():
         'OK-ACCESS-TIMESTAMP': timestamp,
         'OK-ACCESS-PASSPHRASE': api_passphrase,
     }
-    response = requests.get(url, headers=headers)
-    return response.json()
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Проверка на успешный ответ
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error getting account balance: {e}")
+        return {}
 
 # Функция для отправки ордера на OKX
 def place_order_on_okx(action):
     balance_data = get_account_balance()
-    # Предполагаем, что balance_data содержит баланс для нужного типа торговли
-    # Обратите внимание, что API может возвращать данные в другой структуре
-    balance = float(balance_data['data'][0]['total'])  # Пример получения общего баланса
+    if not balance_data or 'data' not in balance_data:
+        print("Failed to retrieve balance data")
+        return
+
+    try:
+        balance = float(balance_data['data'][0]['total'])  # Пример получения общего баланса
+    except (IndexError, ValueError) as e:
+        print(f"Error parsing balance data: {e}")
+        return
 
     position_size = (balance * trade_config["position_size_percent"] / 100)
 
@@ -72,8 +83,13 @@ def place_order_on_okx(action):
         "ordType": trade_config["order_type"],  # Тип ордера
         "sz": str(position_size)  # Размер позиции
     }
-    response = requests.post(url, json=data, headers=headers)
-    return response.json()
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Проверка на успешный ответ
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error placing order: {e}")
+        return {}
 
 # Функция для проверки и выполнения действий
 def check_and_execute_trade():
