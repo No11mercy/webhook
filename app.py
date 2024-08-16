@@ -1,176 +1,106 @@
-from flask import Flask, request, render_template_string
-from datetime import datetime
-import hmac
-import hashlib
+from flask import Flask, request, jsonify
+import ccxt
 import time
 
 app = Flask(__name__)
 
-# Хранилище для полученных вебхуков
-webhooks = []
-
-# Переменные для хранения последних сигналов
-last_indicator_signal = None
-last_strategy_signal = None
-
-# Конфигурация торговли
-trade_config = {
-    "instrument": "BTC-USDT",  # Инструмент для торговли
-    "trade_type": "futures",    # Тип торговли: "spot", "margin", "futures"
-    "order_type": "limit",      # Тип ордера: "market", "limit"
-    "margin_mode": "isolated",  # Режим маржи: "isolated", "cross"
-    "position_size_percent": 50 # Размер позиции в процентах от баланса
+# Хранилище состояния для сигналов
+state = {
+    'pending_signal': None,
+    'timestamp': None,
+    'symbol': None
 }
 
-# Ваши данные API
-api_key = "e7d3faf8-8b6a-4708-9d45-d842e1050e17"
-secret_key = "332D62A8E67767FF68E021CA5CAA5C9C"
-api_passphrase = "1459_Malwar_10_000_Go_Far"
+def execute_trade(signal, symbol):
+    # Создайте клиента
+    exchange = ccxt.okx({
+        'apiKey': 'e7d3faf8-8b6a-4708-9d45-d842e1050e17',
+        'secret': '332D62A8E67767FF68E021CA5CAA5C9C',
+        'password': '1459_Malwar_10_000_Go_Far',
+    })
 
-# Функция для генерации подписи
-def generate_signature(api_secret, timestamp, body):
-    message = f"{timestamp}{body}"
-    signature = hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-    return signature
+    # Задайте использование фьючерсного рынка
+    exchange.options['defaultType'] = 'futures'
 
-# Функция для получения баланса счета
-def get_account_balance():
-    url = 'https://www.okx.com/api/v5/account/balance'
-    timestamp = str(int(time.time()))
-    headers = {
-        'Content-Type': 'application/json',
-        'OK-ACCESS-KEY': api_key,
-        'OK-ACCESS-SIGN': generate_signature(secret_key, timestamp, '{"data": {}}'),
-        'OK-ACCESS-TIMESTAMP': timestamp,
-        'OK-ACCESS-PASSPHRASE': api_passphrase,
-    }
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()  # Проверка на успешный ответ
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error getting account balance: {e}")
-        return {}
+    # Установите плечо
+    leverage = 10
+    exchange.set_leverage(leverage, symbol)
 
-# Функция для отправки ордера на OKX
-def place_order_on_okx(action):
-    balance_data = get_account_balance()
-    if not balance_data or 'data' not in balance_data:
-        print("Failed to retrieve balance data")
-        return
+    # Получите баланс USDT на фьючерсном аккаунте
+    balance = exchange.fetch_balance({'type': 'futures'})
+    usdt_balance = balance['free']['USDT']
+    total_balance = balance['total']['USDT']
 
-    try:
-        balance = float(balance_data['data'][0]['total'])  # Пример получения общего баланса
-    except (IndexError, ValueError) as e:
-        print(f"Error parsing balance data: {e}")
-        return
+    # Получите все открытые позиции
+    positions = exchange.fetch_positions()
+    used_balance = sum([pos['info']['initialMargin'] for pos in positions if pos['symbol'] == symbol])
 
-    position_size = (balance * trade_config["position_size_percent"] / 100)
+    # Если есть открытая позиция, используйте оставшиеся доступные средства
+    if used_balance > 0:
+        order_amount = (usdt_balance / total_balance) * used_balance * leverage
+    else:
+        # Если нет позиции, зайдите на 50% от доступного баланса
+        order_amount = (usdt_balance * 0.5) * leverage
 
-    url = 'https://www.okx.com/api/v5/trade/order'
-    timestamp = str(int(time.time()))
-    headers = {
-        'Content-Type': 'application/json',
-        'OK-ACCESS-KEY': api_key,
-        'OK-ACCESS-SIGN': generate_signature(secret_key, timestamp, '{"data": {}}'),
-        'OK-ACCESS-TIMESTAMP': timestamp,
-        'OK-ACCESS-PASSPHRASE': api_passphrase,
-    }
-    data = {
-        "instId": trade_config["instrument"],  # Пара, например, BTC-USDT
-        "tdMode": trade_config["margin_mode"],  # Режим маржи
-        "side": action,  # "buy" для лонга, "sell" для шорта
-        "ordType": trade_config["order_type"],  # Тип ордера
-        "sz": str(position_size)  # Размер позиции
-    }
-    try:
-        response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()  # Проверка на успешный ответ
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error placing order: {e}")
-        return {}
+    # Получите книгу ордеров для нахождения наилучшей цены
+    order_book = exchange.fetch_order_book(symbol)
+    best_bid = order_book['bids'][0][0] if order_book['bids'] else None  # Лучшая цена на покупку
+    best_ask = order_book['asks'][0][0] if order_book['asks'] else None  # Лучшая цена на продажу
 
-# Функция для проверки и выполнения действий
-def check_and_execute_trade():
-    global last_indicator_signal, last_strategy_signal
+    # Выберите наилучшую цену для лимитного ордера
+    limit_price = best_ask if best_ask else best_bid
 
-    if last_indicator_signal and last_strategy_signal:
-        indicator_action = last_indicator_signal.get('action')
-        strategy_action = last_strategy_signal.get('signal')
+    # В зависимости от сигнала создайте ордер на покупку (лонг) или продажу (шорт)
+    if signal == 'long':
+        order = exchange.create_limit_buy_order(symbol, order_amount, limit_price)
+    elif signal == 'short':
+        order = exchange.create_limit_sell_order(symbol, order_amount, limit_price)
+    else:
+        return {'error': 'Invalid signal'}
 
-        if indicator_action == 'long' and strategy_action == 'signal':
-            result = place_order_on_okx('buy')
-            print("Вход в лонг на OKX:", result)
-        elif indicator_action == 'short' and strategy_action == 'signal':
-            result = place_order_on_okx('sell')
-            print("Вход в шорт на OKX:", result)
+    return order
 
-        # Сбрасываем сигналы после выполнения
-        last_indicator_signal = None
-        last_strategy_signal = None
-
-# Маршрут для получения вебхуков
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global last_indicator_signal, last_strategy_signal
-
     data = request.json
-    if data:
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        webhooks.append({'timestamp': timestamp, 'data': data})
+    signal = data.get('signal')
+    symbol = data.get('symbol')
 
-        # Определяем тип сигнала
-        if 'action' in data:  # Это сигнал от индикатора
-            last_indicator_signal = data
-        elif 'signal' in data:  # Это сигнал от стратегии
-            last_strategy_signal = data
+    current_time = time.time()
 
-        # Проверяем и выполняем сделку, если оба сигнала присутствуют
-        check_and_execute_trade()
+    if signal and symbol:
+        if signal in ['long', 'short']:
+            # Сохраните сигнал, инструмент и текущее время в ожидании подтверждения
+            state['pending_signal'] = signal
+            state['symbol'] = symbol
+            state['timestamp'] = current_time
+            return jsonify({'message': 'Signal saved, waiting for confirmation'}), 200
 
-    return 'Webhook received', 200
+        elif signal == 'ACTVE':
+            if state['pending_signal'] and state['symbol'] == symbol:
+                elapsed_time = current_time - state['timestamp']
+                if elapsed_time <= 15:  # Проверка, что прошло не более 15 секунд
+                    try:
+                        order = execute_trade(state['pending_signal'], state['symbol'])
+                        state['pending_signal'] = None  # Сбросьте состояние после выполнения сделки
+                        state['timestamp'] = None
+                        state['symbol'] = None
+                        return jsonify(order), 200
+                    except Exception as e:
+                        return jsonify({'error': str(e)}), 500
+                else:
+                    # Время ожидания истекло
+                    state['pending_signal'] = None
+                    state['timestamp'] = None
+                    state['symbol'] = None
+                    return jsonify({'message': 'Signal expired'}), 400
+            else:
+                return jsonify({'message': 'No pending signal to confirm or symbol mismatch'}), 400
 
-# Маршрут для отображения вебхуков
-@app.route('/')
-def index():
-    # HTML-шаблон с Bootstrap для стилизации
-    template = '''
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Webhook Viewer</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    </head>
-    <body>
-        <div class="container mt-5">
-            <h1 class="mb-4">Received Webhooks</h1>
-            <table class="table table-striped">
-                <thead>
-                    <tr>
-                        <th scope="col">#</th>
-                        <th scope="col">Timestamp</th>
-                        <th scope="col">Data</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for i in range(webhooks | length) %}
-                    <tr>
-                        <th scope="row">{{ i + 1 }}</th>
-                        <td>{{ webhooks[i].timestamp }}</td>
-                        <td><pre>{{ webhooks[i].data | tojson(indent=2) }}</pre></td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    </body>
-    </html>
-    '''
-    return render_template_string(template, webhooks=webhooks)
+        else:
+            return jsonify({'message': 'Invalid signal provided'}), 400
+    else:
+        return jsonify({'message': 'No signal or symbol provided'}), 400
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
