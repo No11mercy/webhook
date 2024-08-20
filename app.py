@@ -21,6 +21,9 @@ def webhook():
     if request.method == 'POST':
         try:
             data = request.json
+            if data is None:
+                raise ValueError("Пустое тело запроса или некорректный формат данных. Ожидался JSON.")
+
             # Обработка данных от TradingView
             message = f"Получен сигнал от TradingView:\n\n{data}"
             status_code, response_text = send_telegram_message(message)
@@ -31,6 +34,7 @@ def webhook():
                 return jsonify({"status": "error", "message": response_text}), status_code
 
         except Exception as e:
+            # Вывод детализированного сообщения об ошибке
             return jsonify({"status": "error", "message": str(e)}), 500
     else:
         return jsonify({"status": "error", "message": "Только POST-запросы разрешены"}), 405
