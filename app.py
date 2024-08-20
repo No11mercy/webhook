@@ -1,44 +1,49 @@
-import os
-import requests
-from flask import Flask, request
+from flask import Flask, request, jsonify
+import logging
 
 app = Flask(__name__)
 
-# Настройки: Ваши токен и ID чата
-BOT_TOKEN = 'Ваш_Token_Бота'
-CHAT_ID = 'Ваш_ID_Чата'
+# Настройка логирования
+logging.basicConfig(level=logging.DEBUG)
 
-# Функция для отправки сообщения в Telegram
-def send_message(text):
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-    data = {'chat_id': CHAT_ID, 'text': text}
-    response = requests.post(url, data=data)
-    return response
+def send_message(message):
+    # Функция для отправки сообщения или обработки данных
+    app.logger.info(f"Сообщение: {message}")
+    # Здесь вы можете добавить код для обработки данных или отправки уведомлений
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
+        # Логирование заголовков запроса
+        app.logger.debug(f"Заголовки запроса: {request.headers}")
+
+        # Получение типа контента
         content_type = request.headers.get('Content-Type')
-        
+        app.logger.debug(f"Content-Type: {content_type}")
+
+        # Обработка JSON данных
         if content_type == 'application/json':
-            # Если тип контента JSON, извлекаем JSON данные
             data = request.get_json()
+            app.logger.debug(f"Получены данные JSON: {data}")
+
+        # Обработка текстовых данных
         elif content_type == 'text/plain':
-            # Если тип контента текстовый, извлекаем данные как текст
             data = request.get_data(as_text=True)
+            app.logger.debug(f"Получены данные как текст: {data}")
+
+        # Если тип данных не поддерживается
         else:
-            # Если тип контента другой, возвращаем ошибку
-            return {"error": "Unsupported Media Type"}, 415
-        
-        # Отправляем сообщение в Telegram
+            app.logger.error("Unsupported Media Type")
+            return jsonify({"error": "Unsupported Media Type"}), 415
+
+        # Обработка данных
         send_message(f"Получены данные: {data}")
-        
-        return {"status": "ok"}, 200
+        return jsonify({"status": "ok"}), 200
 
     except Exception as e:
         # Логирование ошибки
         app.logger.error(f"Произошла ошибка: {str(e)}")
-        return {"error": str(e)}, 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
