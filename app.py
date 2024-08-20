@@ -18,12 +18,17 @@ def send_message(text):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Пытаемся получить данные как JSON
-        data = request.get_json()
+        content_type = request.headers.get('Content-Type')
         
-        # Если данные пусты, используем сырые данные (в случае text/plain)
-        if not data:
+        if content_type == 'application/json':
+            # Если тип контента JSON, извлекаем JSON данные
+            data = request.get_json()
+        elif content_type == 'text/plain':
+            # Если тип контента текстовый, извлекаем данные как текст
             data = request.get_data(as_text=True)
+        else:
+            # Если тип контента другой, возвращаем ошибку
+            return {"error": "Unsupported Media Type"}, 415
         
         # Отправляем сообщение в Telegram
         send_message(f"Получены данные: {data}")
