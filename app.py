@@ -32,14 +32,15 @@ def webhook():
         logging.debug(f"Request data: {request.data.decode('utf-8')}")
 
         # Проверяем тип контента и извлекаем данные
-        if request.content_type == 'application/json':
+        content_type = request.content_type.split(';')[0].strip()
+        if content_type == 'application/json':
             data = request.json
             if not data or 'message' not in data:
                 error_msg = 'No message provided in JSON'
                 logging.error(error_msg)
                 return jsonify({'error': error_msg}), 400
             message = data['message']
-        elif request.content_type == 'text/plain':
+        elif content_type == 'text/plain':
             message = request.data.decode('utf-8')
         else:
             error_msg = 'Unsupported Content-Type'
