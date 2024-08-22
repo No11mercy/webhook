@@ -4,7 +4,7 @@ import requests
 app = Flask(__name__)
 
 # Конфигурация Telegram бота
-BOT_TOKEN = '7402959710:AAEDvr_7T4iuj03om31qSo6HXgMk-rwX-8g'
+BOT_TOKEN = '7331726032:AAG1mu4u5otoscG5qkIjNHUQ5pNLHG27AuE'
 CHAT_ID = '7523609617'
 TELEGRAM_API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
 
